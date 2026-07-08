@@ -9,7 +9,7 @@
   "scripts": {
     "start": "node src/cli.js",
     "opi": "node src/opi.js",
-    "test": "node --test"
+    "test": "SUMUP_API_KEY=mock_key SUMUP_MERCHANT_CODE=mock_merchant SUMUP_AFFILIATE_KEY=mock_affiliate node --test"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.5.2",

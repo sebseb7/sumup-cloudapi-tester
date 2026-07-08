@@ -45,8 +45,9 @@ export function startOpiServer() {
     socket.on('error', (err) => console.error(`[OPI] Socket error: ${err.message}`));
   });
 
-  server.listen(OPI_PORT, '0.0.0.0', () => {
-    console.log(`[OPI] Listening on 0.0.0.0:${OPI_PORT}`);
+  const opiHost = process.env.OPI_HOST || '0.0.0.0';
+  server.listen(OPI_PORT, opiHost, () => {
+    console.log(`[OPI] Listening on ${opiHost}:${OPI_PORT}`);
   });
 }
 
@@ -176,7 +177,9 @@ async function handleMessage(socket, xml, remote) {
           () => new Date().toISOString(), // dummy elapsed function
           (attempt, status) => {
             console.log(`[OPI] Poll attempt ${attempt}: ${status}`);
-            const remaining = 45 - (attempt * 5); // Attempt 1 -> 40, Attempt 9 -> 0
+            const intervalMs = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10);
+            const timeoutMs = parseInt(process.env.POLL_TIMEOUT_MS || '40000', 10);
+            const remaining = Math.ceil((timeoutMs + intervalMs - (attempt * intervalMs)) / 1000);
             if (remaining <= 0) {
               console.log(`[OPI] Countdown reached 0. Aborting checkout on reader ${readerId}...`);
               terminateCheckout(readerId).catch(() => { });

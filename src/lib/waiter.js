@@ -47,7 +47,7 @@ export function startWebhookServer() {
       }
     });
   });
-  globalWebhookServer.listen(port, '127.0.0.1', () => {});
+  globalWebhookServer.listen(port, process.env.WEBHOOK_HOST || '127.0.0.1', () => {});
   // Unref the server so it doesn't keep the Node event loop alive if everything else exits
   globalWebhookServer.unref();
 }
@@ -85,7 +85,8 @@ export function waitForWebhook(clientTxId, elapsed, signal, timeoutMs = 5 * 60 *
 /**
  * Poll the Transactions API every 10 seconds until a terminal status is reached.
  */
-export function pollTransaction(clientTransactionId, onAttempt, signal, timeoutMs = 5 * 60 * 1000) {
+export function pollTransaction(clientTransactionId, onAttempt, signal, timeoutMs = parseInt(process.env.POLL_TIMEOUT_MS || '40000', 10)) {
+  const intervalMs = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10);
   let forcePoll;
   const promise = new Promise((resolve, reject) => {
     let interval;
@@ -112,12 +113,12 @@ export function pollTransaction(clientTransactionId, onAttempt, signal, timeoutM
 
     let aborted = false;
 
-    interval = setInterval(attemptFetch, 5_000);
+    interval = setInterval(attemptFetch, intervalMs);
     forcePoll = () => {
       if (aborted) return;
       clearInterval(interval);
       attemptFetch();
-      interval = setInterval(attemptFetch, 5_000);
+      interval = setInterval(attemptFetch, intervalMs);
     };
 
     const timer = setTimeout(() => {

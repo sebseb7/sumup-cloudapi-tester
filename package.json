@@ -1,5 +1,5 @@
 {
-  "name": "sumup-cloudapi",
+  "name": "sumup-opi-bridge",
   "version": "1.0.0",
   "description": "SumUp Cloud API sandbox testing tool",
   "type": "module",
@@ -8,9 +8,7 @@
   },
   "scripts": {
     "start": "node src/cli.js",
-    "opi": "node src/opi.js",
-    "ncu": "ncu",
-    "update": "ncu -u && npm install"
+    "opi": "node src/opi.js"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.5.2",

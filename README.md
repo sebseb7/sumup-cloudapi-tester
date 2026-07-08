@@ -1,8 +1,8 @@
-# sumup-cloudapi
+# sumup-opi-bridge
 
-Node.js tooling for testing the [SumUp Cloud API](https://developer.sumup.com/terminal-payments/cloud-api/) in sandbox mode.
+Node.js OPI bridge for Point of Sale (POS) systems to interact with the [SumUp Cloud API](https://developer.sumup.com/terminal-payments/cloud-api/).
 
-Includes a **reusable library** (`src/lib/`), an **interactive CLI** (`src/cli.js`), and an **OPI bridge** (`src/opi.js`) that cover the full checkout lifecycle — pairing, checkout, real-time result via webhook + transaction polling.
+Includes the standalone **OPI bridge** (`src/opi.js`), along with an **interactive CLI** (`src/cli.js`) and a **reusable library** (`src/lib/`) for testing the full checkout lifecycle — pairing, checkout, real-time result via webhook + transaction polling.
 
 ---
 
@@ -19,7 +19,7 @@ Includes a **reusable library** (`src/lib/`), an **interactive CLI** (`src/cli.j
 
 ```bash
 git clone <repo>
-cd sumup-cloudapi
+cd sumup-opi-bridge
 cp .env.example .env   # fill in your values
 npm install
 ```
@@ -37,7 +37,25 @@ npm install
 
 ---
 
-## Running the CLI
+## Running the OPI Bridge
+
+The OPI bridge allows legacy Point of Sale (POS) systems (like the **JTL POS App**) speaking the OPI XML protocol over TCP to transparently interact with the SumUp Cloud API.
+
+```bash
+npm run opi
+```
+
+The OPI server listens on TCP port `4102` (the standard `OPI_PORT_ECR`).
+- When a `<CardPayment>` request is received from the POS, the bridge instantly creates a Cloud API checkout on your paired reader.
+- It pushes `<DeviceRequest>` messages back to the POS Cashier Display (port `4100`) to show connection status, battery levels, and countdowns.
+- It shares the same robust **concurrent webhook + polling race strategy** as the CLI to safely block the POS until the payment completes on the SumUp terminal.
+- Finally, it prints the receipt on the POS printer via OPI before resolving the checkout.
+
+You can explicitly assign a reader by setting `SUMUP_READER_ID` in your `.env`. Otherwise, it automatically connects to the first `PAIRED` reader it finds.
+
+---
+
+## Running the CLI (Testing Tool)
 
 ```bash
 npm start
@@ -68,7 +86,7 @@ The CLI presents a persistent menu:
 2. Enter amount, currency, optional description, optional tipping
 3. Confirm — the CLI starts an embedded HTTP server and sends the checkout
 4. The reader prompts the customer for card presentation
-5. SumUp POSTs the result to `WEBHOOK_URL` **and** the CLI polls the Transactions API every 10 seconds in parallel
+5. SumUp POSTs the result to `WEBHOOK_URL` **and** the CLI polls the Transactions API every 5 seconds in parallel
 6. Whichever resolves first wins the race; the full transaction record is displayed:
 
 ```
@@ -99,26 +117,10 @@ Getting real-time transaction updates from hardware payment terminals is tricky 
 To guarantee you see the result as fast as possible without missing events, the CLI implements a **concurrent resolution strategy** using a `Promise.race`:
 
 1. **Webhook Listener**: The CLI runs an HTTP server on `WEBHOOK_PORT`. When you send a checkout, its ID is registered in a global waiting list. When SumUp `POST`s the envelope to your webhook URL, the server matches the transaction ID and resolves it. This is usually the fastest path.
-2. **Long-polling Fallback**: In parallel, the CLI polls the Transactions API (`GET /v2.1/merchants/...`) every 10 seconds. If the webhook fails to deliver (e.g. your local port-forwarding dropped, or an edge-case timeout occurred), the poll guarantees the transaction status is still caught and resolved.
+2. **Long-polling Fallback**: In parallel, the CLI polls the Transactions API (`GET /v2.1/merchants/...`) every 5 seconds. If the webhook fails to deliver (e.g. your local port-forwarding dropped, or an edge-case timeout occurred), the poll guarantees the transaction status is still caught and resolved.
 3. **Graceful Abort**: The `Promise.race` uses an `AbortController`. Whichever method resolves the transaction first sends an abort signal to the *loser*, cleanly tearing down interval timers and removing the checkout from the waiting list to prevent duplicate state updates.
 
----
 
-## OPI Bridge
-
-The project includes a standalone OPI bridge that allows legacy Point of Sale (POS) systems speaking the OPI XML protocol over TCP to transparently interact with the SumUp Cloud API.
-
-```bash
-npm run opi
-```
-
-The OPI server listens on TCP port `4102` (the standard `OPI_PORT_ECR`).
-- When a `<CardPayment>` request is received from the POS, the bridge instantly creates a Cloud API checkout on your paired reader.
-- It pushes `<DeviceRequest>` messages back to the POS Cashier Display (port `4100`) to show connection status, battery levels, and countdowns.
-- It shares the same robust **concurrent webhook + polling race strategy** as the CLI to safely block the POS until the payment completes on the SumUp terminal.
-- Finally, it prints the receipt on the POS printer via OPI before resolving the checkout.
-
-You can explicitly assign a reader by setting `SUMUP_READER_ID` in your `.env`. Otherwise, it automatically connects to the first `PAIRED` reader it finds.
 
 ---
 

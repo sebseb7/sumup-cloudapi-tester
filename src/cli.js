@@ -256,6 +256,8 @@ async function actionCreateCheckout() {
       validate: (v) => {
         const rates = v.split(',').map((r) => parseFloat(r.trim()));
         if (rates.some(isNaN)) return 'All values must be numbers';
+        if (rates.length !== 3) return 'You must provide exactly 3 tip rates (e.g. 10,15,20)';
+        if (rates[0] >= rates[1] || rates[1] >= rates[2]) return 'Tip rates must be in ascending order';
         if (rates.some((r) => r < 1 || r > 99)) return 'Each rate must be between 1 and 99 (percent)';
         return true;
       },
@@ -317,7 +319,8 @@ async function actionCreateCheckout() {
     console.log(`  ${chalk.gray(elapsed())}  ${chalk.blue(`poll #${attempt}`)}  →  ${statusFn(status)}`);
   };
 
-  console.log(chalk.gray(`  ${''.padStart(5)}  Sources: TX API poll (every 10s)${webhookUrl ? ' + webhook' : ''}`));
+  const intervalSeconds = parseInt(process.env.POLL_INTERVAL_MS || '5000', 10) / 1000;
+  console.log(chalk.gray(`  ${''.padStart(5)}  Sources: TX API poll (every ${intervalSeconds}s)${webhookUrl ? ' + webhook' : ''}`));
   console.log(chalk.gray(`  ${''.padStart(5)}  Press ${chalk.white('t')} to terminate the checkout early.`));
 
   let globalForcePoll;

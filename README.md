@@ -1,3 +1,5 @@
+[![Tests](https://github.com/sebseb7/sumup-opi-bridge/actions/workflows/test.yml/badge.svg)](https://github.com/sebseb7/sumup-opi-bridge/actions/workflows/test.yml)
+
 # sumup-opi-bridge
 
 Node.js OPI bridge for Point of Sale (POS) systems to interact with the [SumUp Cloud API](https://developer.sumup.com/terminal-payments/cloud-api/).

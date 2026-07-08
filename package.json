@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node src/cli.js",
+    "opi": "node src/opi.js",
     "ncu": "ncu",
     "update": "ncu -u && npm install"
   },

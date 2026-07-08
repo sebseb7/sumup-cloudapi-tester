@@ -2,7 +2,7 @@
 
 Node.js tooling for testing the [SumUp Cloud API](https://developer.sumup.com/terminal-payments/cloud-api/) in sandbox mode.
 
-Includes a **reusable library** (`src/lib/`) and an **interactive CLI** (`src/cli.js`) that covers the full checkout lifecycle — pairing, checkout, real-time result via webhook + transaction polling.
+Includes a **reusable library** (`src/lib/`), an **interactive CLI** (`src/cli.js`), and an **OPI bridge** (`src/opi.js`) that cover the full checkout lifecycle — pairing, checkout, real-time result via webhook + transaction polling.
 
 ---
 
@@ -102,6 +102,23 @@ To guarantee you see the result as fast as possible without missing events, the 
 2. **Long-polling Fallback**: In parallel, the CLI polls the Transactions API (`GET /v2.1/merchants/...`) every 10 seconds. If the webhook fails to deliver (e.g. your local port-forwarding dropped, or an edge-case timeout occurred), the poll guarantees the transaction status is still caught and resolved.
 3. **Graceful Abort**: The `Promise.race` uses an `AbortController`. Whichever method resolves the transaction first sends an abort signal to the *loser*, cleanly tearing down interval timers and removing the checkout from the waiting list to prevent duplicate state updates.
 
+---
+
+## OPI Bridge
+
+The project includes a standalone OPI bridge that allows legacy Point of Sale (POS) systems speaking the OPI XML protocol over TCP to transparently interact with the SumUp Cloud API.
+
+```bash
+npm run opi
+```
+
+The OPI server listens on TCP port `4102` (the standard `OPI_PORT_ECR`).
+- When a `<CardPayment>` request is received from the POS, the bridge instantly creates a Cloud API checkout on your paired reader.
+- It pushes `<DeviceRequest>` messages back to the POS Cashier Display (port `4100`) to show connection status, battery levels, and countdowns.
+- It shares the same robust **concurrent webhook + polling race strategy** as the CLI to safely block the POS until the payment completes on the SumUp terminal.
+- Finally, it prints the receipt on the POS printer via OPI before resolving the checkout.
+
+You can explicitly assign a reader by setting `SUMUP_READER_ID` in your `.env`. Otherwise, it automatically connects to the first `PAIRED` reader it finds.
 
 ---
 

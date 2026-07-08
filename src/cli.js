@@ -21,6 +21,7 @@ import {
   merchantCode,
   getTransaction,
 } from './lib/index.js';
+import { waitForPaymentResult, pollTransaction, waitForWebhook, startWebhookServer } from './lib/waiter.js';
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -99,133 +100,7 @@ function printResult({ source, data }) {
   console.log('');
 }
 
-const pendingWebhooks = new Map();
-let globalWebhookServer = null;
 
-function startWebhookServer() {
-  if (globalWebhookServer) return;
-  const port = parseInt(process.env.WEBHOOK_PORT ?? '58180', 10);
-  globalWebhookServer = http.createServer((req, res) => {
-    if (req.method !== 'POST') { res.writeHead(404).end(); return; }
-    let body = '';
-    req.on('data', (chunk) => { body += chunk; });
-    req.on('end', () => {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ received: true }));
-      let data;
-      try { data = JSON.parse(body); } catch { data = { raw: body }; }
-      
-      const ctid = data?.payload?.client_transaction_id;
-      if (ctid && pendingWebhooks.has(ctid)) {
-        const resolve = pendingWebhooks.get(ctid);
-        resolve({ source: 'webhook', data });
-      }
-    });
-  });
-  globalWebhookServer.listen(port, '127.0.0.1', () => {});
-  // Unref the server so it doesn't keep the Node event loop alive if everything else exits
-  globalWebhookServer.unref();
-}
-
-/**
- * Wait for the global webhook server to receive a POST for this clientTransactionId.
- * Resolves with { source: 'webhook', data: <parsed body> }
- *
- * @param {string} clientTxId
- * @param {() => string} elapsed  Returns current elapsed time string for logging
- * @param {AbortSignal} [signal]  Signal to abort listening if the race is won elsewhere
- * @param {number} timeoutMs
- * @returns {Promise<{ source: string, data: Record<string, unknown> }>}
- */
-function waitForWebhook(clientTxId, elapsed, signal, timeoutMs = 5 * 60 * 1000) {
-  startWebhookServer();
-
-  return new Promise((resolve, reject) => {
-    pendingWebhooks.set(clientTxId, (result) => {
-      pendingWebhooks.delete(clientTxId);
-      clearTimeout(timer);
-      console.log(`  ${chalk.gray(elapsed())}  ${chalk.magenta('webhook')}  →  ${chalk.bold('received')}`);
-      resolve(result);
-    });
-
-    const timer = setTimeout(() => {
-      pendingWebhooks.delete(clientTxId);
-      reject(new Error('Timed out waiting for webhook'));
-    }, timeoutMs);
-
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        pendingWebhooks.delete(clientTxId);
-        clearTimeout(timer);
-      });
-    }
-  });
-}
-
-/**
- * Poll the Transactions API every 10 seconds until a terminal status is reached.
- * Resolves with { source: 'poll', data: <tx object> }
- *
- * @param {string} clientTransactionId
- * @param {(attempt: number, status: string) => void} onAttempt  Called on every poll with attempt number and status
- * @param {AbortSignal} [signal]  Signal to abort polling if the race is won elsewhere
- * @param {number} timeoutMs
- * @returns {Promise<{ source: string, data: Record<string, unknown> }>}
- */
-function pollTransaction(clientTransactionId, onAttempt, signal, timeoutMs = 5 * 60 * 1000) {
-  const TERMINAL = new Set(['SUCCESSFUL', 'FAILED', 'CANCELLED', 'REFUNDED']);
-  let forcePoll;
-  const promise = new Promise((resolve, reject) => {
-    let interval;
-    let attempt = 0;
-    const attemptFetch = async () => {
-      attempt++;
-      try {
-        const tx = await getTransaction({ clientTransactionId });
-        if (aborted) return; // Prevent logging if aborted while the request was in-flight
-        
-        const status = String(tx?.status ?? 'unknown');
-        onAttempt(attempt, status);
-        if (TERMINAL.has(status.toUpperCase())) {
-          clearInterval(interval);
-          clearTimeout(timer);
-          resolve({ source: 'poll', data: tx });
-        }
-      } catch (err) {
-        if (aborted) return; // Prevent error logging if aborted in-flight
-        onAttempt(attempt, `error: ${err.message}`);
-      }
-    };
-
-    let aborted = false;
-
-    interval = setInterval(attemptFetch, 10_000);
-    forcePoll = () => {
-      if (aborted) return;
-      clearInterval(interval);
-      attemptFetch();
-      interval = setInterval(attemptFetch, 10_000);
-    };
-
-    const timer = setTimeout(() => {
-      clearInterval(interval);
-      reject(new Error('Polling timed out'));
-    }, timeoutMs);
-
-    if (signal) {
-      signal.addEventListener('abort', () => {
-        aborted = true;
-        clearInterval(interval);
-        clearTimeout(timer);
-      });
-    }
-  });
-
-  // Attach the manual trigger to the promise
-  // @ts-ignore
-  promise.force = forcePoll;
-  return promise;
-}
 
 /** Pretty-print a reader object */
 function printReader(reader) {
@@ -437,21 +312,15 @@ async function actionCreateCheckout() {
   };
 
   // Start webhook listener BEFORE the race block so we don't miss a fast response
-  const abortController = new AbortController();
-  const webhookPromise = webhookUrl ? waitForWebhook(clientTxId, elapsed, abortController.signal) : null;
-
-  // Race: webhook vs TX API polling every 10s
-  // Each source prints a new line on every event — no spinner, full history visible
-  const pollPromise = pollTransaction(clientTxId, (attempt, status) => {
+  const onPollAttempt = (attempt, status) => {
     const statusFn = TX_STATUS_COLOR[status.toUpperCase()] ?? chalk.gray;
     console.log(`  ${chalk.gray(elapsed())}  ${chalk.blue(`poll #${attempt}`)}  →  ${statusFn(status)}`);
-  }, abortController.signal);
-
-  const raceable = [pollPromise];
-  if (webhookPromise) raceable.push(webhookPromise);
+  };
 
   console.log(chalk.gray(`  ${''.padStart(5)}  Sources: TX API poll (every 10s)${webhookUrl ? ' + webhook' : ''}`));
   console.log(chalk.gray(`  ${''.padStart(5)}  Press ${chalk.white('t')} to terminate the checkout early.`));
+
+  let globalForcePoll;
 
   process.stdin.resume();
   readline.emitKeypressEvents(process.stdin);
@@ -466,8 +335,7 @@ async function actionCreateCheckout() {
       try {
         await terminateCheckout(reader.id);
         console.log(`  ${chalk.gray(elapsed())}  ${chalk.green('termination signal sent')}`);
-        // @ts-ignore
-        setTimeout(() => pollPromise.force(), 1000);
+        if (globalForcePoll) setTimeout(() => globalForcePoll(), 1000);
       } catch (err) {
         console.log(`  ${chalk.gray(elapsed())}  ${chalk.red(`termination failed: ${err.message}`)}`);
       }
@@ -482,26 +350,13 @@ async function actionCreateCheckout() {
   };
 
   try {
-    let winner = await Promise.race(raceable);
+    const { winner, forcePoll } = await waitForPaymentResult(clientTxId, webhookUrl, elapsed, onPollAttempt);
+    globalForcePoll = forcePoll;
+    
     cleanupKeypress();
-    abortController.abort(); // Cancel the loser
-
-    // Webhook arrived first — enrich with full TX details from the API
-    if (winner.source === 'webhook') {
-      const webhookPayload = /** @type {any} */ (winner.data);
-      const ctid = webhookPayload?.payload?.client_transaction_id ?? clientTxId;
-      try {
-        const tx = await getTransaction({ clientTransactionId: ctid });
-        winner = { source: 'webhook', data: tx }; // preserve original source for the UI
-      } catch {
-        // TX lookup failed — fall back to webhook envelope display
-      }
-    }
-
     printResult(winner);
   } catch (err) {
     cleanupKeypress();
-    abortController.abort();
     process.stdout.write('\r\x1b[K');
     console.log(chalk.yellow(`\n  ⚠  ${err.message}\n`));
   }
